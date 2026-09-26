@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>3D 跑酷 · yourgame</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  html,body{margin:0;height:100%;background:#0a0f1e;overflow:hidden;font-family:Menlo,monospace;color:#fff}
+  #hud{position:fixed;left:20px;top:16px;font-size:20px;color:#9db4e6;text-shadow:0 2px 8px #000}#hud b{color:#fff;font-size:26px}
+  #msg{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;background:rgba(7,10,20,.6);font-size:20px;text-align:center}
+  #msg h1{font-size:44px;margin:0;color:#34d2ff}#msg.hide{display:none}#msg small{color:#9db4e6}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">SCORE <b id="score">0</b> &nbsp;&nbsp; SPEED <b id="speed">0</b> m/s</div>
+<div id="msg"><h1>3D 跑酷</h1><div>← → 变道 &nbsp;·&nbsp; 空格 起跳 &nbsp;·&nbsp; 撞到红块结束</div><div>按 <b>空格</b> 开始</div><small>yourgame · 视频 G01 · 约 120 行</small></div>
+<script type="module">
+import * as THREE from '../../vendor/three.module.js';
+
+// ── 舞台: 场景 / 相机 / 灯 ──────────────────────────────────────────
+const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: true });
+renderer.setSize(innerWidth, innerHeight); renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true; renderer.toneMapping = THREE.ACESFilmicToneMapping;
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x0a0f1e); scene.fog = new THREE.FogExp2(0x0a0f1e, 0.028);
+const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 300);
+scene.add(new THREE.HemisphereLight(0x6b8cff, 0x0a0f1e, 0.7));
+const sun = new THREE.DirectionalLight(0xfff1d6, 2.4); sun.position.set(6, 10, 5); sun.castShadow = true;
+sun.shadow.camera.left = -14; sun.shadow.camera.right = 14; sun.shadow.camera.top = 14; sun.shadow.camera.bottom = -30; scene.add(sun);
+addEventListener('resize', () => { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); });
+
+// ── 地面 + 跑道 ──────────────────────────────────────────────────────
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(300, 500), new THREE.MeshStandardMaterial({ color: 0x0f1626 }));
+ground.rotation.x = -Math.PI / 2; ground.position.z = -150; ground.receiveShadow = true; scene.add(ground);
+const road = new THREE.Mesh(new THREE.PlaneGeometry(6.4, 400), new THREE.MeshStandardMaterial({ color: 0x1a2340, roughness: .85 }));
+road.rotation.x = -Math.PI / 2; road.position.set(0, .01, -180); road.receiveShadow = true; scene.add(road);
+const glow = (c, i) => new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: i });
+for (const x of [-3.2, 3.2]) { const e = new THREE.Mesh(new THREE.BoxGeometry(.08, .06, 400), glow(0x34d2ff, 1.6)); e.position.set(x, .04, -180); scene.add(e); }
+const dashes = [];                                           // 车道虚线, 跟着 dist 往后跑
+for (let k = 0; k < 90; k++) for (const x of [-1.07, 1.07]) { const d = new THREE.Mesh(new THREE.BoxGeometry(.07, .04, 1.6), glow(0x6b8cff, .7)); d.position.set(x, .03, 0); scene.add(d); dashes.push({ m: d, k }); }
+const pillars = [];                                          // 两侧楼影, 视差
+for (let k = 0; k < 44; k++) { const h = 2 + Math.random() * 9, w = 1.2 + Math.random() * 1.6; const g = new THREE.Group();
+  const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, w), new THREE.MeshStandardMaterial({ color: 0x151d33 })); b.position.y = h / 2; g.add(b);
+  const c = new THREE.Mesh(new THREE.BoxGeometry(w + .04, .06, w + .04), glow(0x2aa9ff, .9)); c.position.y = h + .03; g.add(c);
+  g.position.x = (k % 2 ? 1 : -1) * (5.6 + Math.random() * 3.5); g.userData.k = k; scene.add(g); pillars.push(g); }
+
+// ── 主角 + 障碍 ──────────────────────────────────────────────────────
+const player = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ color: 0x3b82f6, emissive: 0x1d4ed8, emissiveIntensity: .35, metalness: .35, roughness: .35 }));
+player.castShadow = true; scene.add(player);
+const obsMat = glow(0xff3b3b, .95); const obstacles = [];
+function spawn(z) { const m = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), obsMat); m.castShadow = true; m.position.set((Math.floor(Math.random() * 3) - 1) * 2.1, .5, z); scene.add(m); obstacles.push(m); }
+
+// ── 状态 ────────────────────────────────────────────────────────────
+const G0 = 22, VJ = 9.2;                                     // 重力 / 起跳速度
+let lane = 0, x = 0, y = 0, vy = 0, dist = 0, speed = 0, score = 0, elapsed = 0, nextSpawn = 30, alive = false;
+const keys = {}; const msg = document.getElementById('msg');
+function reset() { for (const o of obstacles) scene.remove(o); obstacles.length = 0; lane = x = y = vy = dist = score = elapsed = 0; speed = 12; nextSpawn = 30; alive = true; msg.classList.add('hide'); }
+addEventListener('keydown', e => {
+  if (e.code === 'Space') { e.preventDefault(); if (!alive) return reset(); if (y <= 0.001) vy = VJ; }   // 起跳
+  if (!alive) return;
+  if (e.code === 'ArrowLeft') lane = Math.max(-1, lane - 1);
+  if (e.code === 'ArrowRight') lane = Math.min(1, lane + 1);
+});
+
+// ── 每一帧 ──────────────────────────────────────────────────────────
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(.05, (now - last) / 1000); last = now;
+  if (alive) {
+    elapsed += dt; speed = Math.min(12 + elapsed * .9, 26);    // 越跑越快
+    dist += speed * dt;
+    vy -= G0 * dt; y = Math.max(0, y + vy * dt); if (y === 0) vy = 0;   // 重力
+    x += (lane * 2.1 - x) * Math.min(1, dt * 12);              // 变道平滑
+    if (dist > nextSpawn) { spawn(-60); nextSpawn = dist + 13; }
+    for (const o of obstacles) {
+      o.position.z += speed * dt;
+      const hit = Math.abs(o.position.x - x) < 1 && Math.abs(o.position.z) < 1 && y < 1;   // 两个盒子有没有重叠
+      if (hit) { alive = false; msg.querySelector('h1').textContent = 'GAME OVER'; msg.querySelector('div').textContent = '得分 ' + score + ' · 按空格再来'; msg.classList.remove('hide'); }
+      if (o.position.z > .6 && !o.passed) { o.passed = true; score++; }
+    }
+    for (let i = obstacles.length - 1; i >= 0; i--) if (obstacles[i].position.z > 12) { scene.remove(obstacles[i]); obstacles.splice(i, 1); }
+  }
+  for (const { m, k } of dashes) m.position.z = 12 - ((k * 3.2 + dist) % 288);
+  for (const g of pillars) g.position.z = 14 - ((g.userData.k * 7.5 + dist) % 330);
+  player.position.set(x, .5 + y, 0); player.rotation.x = -Math.min(.5, y * .25);
+  camera.position.set(x * .55, 3.1 + y * .15, 8.2); camera.lookAt(x * .3, 1 + y * .2, -7);
+  camera.fov = 55 + (speed - 12) * .5; camera.updateProjectionMatrix();
+  document.getElementById('score').textContent = score; document.getElementById('speed').textContent = speed.toFixed(0);
+  renderer.render(scene, camera); requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>3D 俄罗斯方块 · yourgame</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  html,body{margin:0;height:100%;background:#07080c;overflow:hidden;font-family:Menlo,monospace;color:#fff}
+  #hud{position:fixed;left:20px;top:16px;font-size:18px;color:#9db4e6;display:flex;gap:26px;text-shadow:0 2px 8px #000}#hud b{color:#fff;font-size:24px;margin-left:8px}
+  #msg{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;background:rgba(7,8,12,.6);font-size:20px;text-align:center}
+  #msg h1{font-size:44px;margin:0;color:#a855f7}#msg.hide{display:none}#msg small{color:#9db4e6}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud"><div>SCORE<b id="score">0</b></div><div>LINES<b id="lines">0</b></div><div>LEVEL<b id="level">1</b></div></div>
+<div id="msg"><h1>3D 俄罗斯方块</h1><div>← → 移动 · ↑ 旋转 · ↓ 加速 · 空格 直落</div><div>按 <b>空格</b> 开始</div><small>yourgame · 视频 G02 · 约 200 行</small></div>
+<script type="module">
+import * as THREE from '../../vendor/three.module.js';
+import { RoundedBoxGeometry } from '../../vendor/addons/geometries/RoundedBoxGeometry.js';
+
+// ── 井: 10 宽 20 高 + 一盏灯 + 一个相机 ─────────────────────────────
+const W = 10, H = 20;
+let board = Array.from({ length: H }, () => Array(W).fill(null));   // board[y][x] = 形状名 | null, y=0 是顶
+const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: true });
+renderer.setSize(innerWidth, innerHeight); renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); renderer.shadowMap.enabled = true; renderer.toneMapping = THREE.ACESFilmicToneMapping;
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x07080c); scene.fog = new THREE.FogExp2(0x07080c, .012);
+const camera = new THREE.PerspectiveCamera(41, innerWidth / innerHeight, .1, 200);
+scene.add(new THREE.HemisphereLight(0x6b8cff, 0x07080c, .55));
+const key = new THREE.DirectionalLight(0xffffff, 1.6); key.position.set(12, 30, 18); key.castShadow = true; key.shadow.camera.left = -14; key.shadow.camera.right = 14; key.shadow.camera.top = 26; key.shadow.camera.bottom = -4; scene.add(key);
+addEventListener('resize', () => { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); });
+const glow = (c, i) => new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: i });
+const back = new THREE.Mesh(new THREE.PlaneGeometry(W, H), new THREE.MeshStandardMaterial({ color: 0x0d1424 })); back.position.set(0, H / 2, -.55); back.receiveShadow = true; scene.add(back);
+const gp = []; for (let x = 0; x <= W; x++) gp.push(x - W / 2, 0, -.5, x - W / 2, H, -.5); for (let y = 0; y <= H; y++) gp.push(-W / 2, y, -.5, W / 2, y, -.5);
+scene.add(new THREE.LineSegments(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(gp, 3)), new THREE.LineBasicMaterial({ color: 0x1e2a4a })));
+const edgeMat = glow(0x34d2ff, 1.3);
+for (const x of [-W / 2 - .08, W / 2 + .08]) { const e = new THREE.Mesh(new THREE.BoxGeometry(.16, H, 1.1), edgeMat); e.position.set(x, H / 2, 0); scene.add(e); }
+const bottom = new THREE.Mesh(new THREE.BoxGeometry(W + .32, .16, 1.1), edgeMat); bottom.position.y = -.08; scene.add(bottom);
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), new THREE.MeshStandardMaterial({ color: 0x090c15 })); floor.rotation.x = -Math.PI / 2; floor.position.y = -.2; floor.receiveShadow = true; scene.add(floor);
+
+// ── 七种形状 + 7-bag 发牌 ────────────────────────────────────────────
+const SHAPES = {
+  I: { n: 4, c: [[0, 1], [1, 1], [2, 1], [3, 1]], col: 0x34d2ff }, O: { n: 2, c: [[0, 0], [1, 0], [0, 1], [1, 1]], col: 0xffd60a },
+  T: { n: 3, c: [[0, 1], [1, 1], [2, 1], [1, 0]], col: 0xa855f7 }, S: { n: 3, c: [[1, 0], [2, 0], [0, 1], [1, 1]], col: 0x22c55e },
+  Z: { n: 3, c: [[0, 0], [1, 0], [1, 1], [2, 1]], col: 0xff3b3b }, J: { n: 3, c: [[0, 0], [0, 1], [1, 1], [2, 1]], col: 0x3b82f6 },
+  L: { n: 3, c: [[2, 0], [0, 1], [1, 1], [2, 1]], col: 0xff8c1a },
+};
+let bag = [];
+function nextShape() { if (!bag.length) { bag = Object.keys(SHAPES); for (let i = 6; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [bag[i], bag[j]] = [bag[j], bag[i]]; } } return bag.pop(); }
+function cells(shape, rot) { const { n, c } = SHAPES[shape]; let cs = c.map(([x, y]) => [x, y]); for (let r = 0; r < rot; r++) cs = cs.map(([x, y]) => [n - 1 - y, x]); return cs; }   // 绕盒中心转 90°
+const fits = (cs, x0, y0) => cs.every(([x, y]) => { const X = x0 + x, Y = y0 + y; return X >= 0 && X < W && Y < H && (Y < 0 || !board[Y][X]); });   // 碰撞检测: 一切的基础
+
+// ── 方块池 / 碎片 / NEXT 框 ─────────────────────────────────────────
+const geo = new RoundedBoxGeometry(.92, .92, .92, 3, .1);
+const mats = {}; for (const k in SHAPES) mats[k] = new THREE.MeshStandardMaterial({ color: SHAPES[k].col, emissive: SHAPES[k].col, emissiveIntensity: .45, roughness: .35, metalness: .2 });
+const ghostMats = {}; for (const k in SHAPES) ghostMats[k] = new THREE.MeshStandardMaterial({ color: SHAPES[k].col, emissive: SHAPES[k].col, emissiveIntensity: .6, transparent: true, opacity: .22, depthWrite: false });
+const pool = []; for (let i = 0; i < 240; i++) { const m = new THREE.Mesh(geo, mats.T); m.castShadow = true; m.visible = false; scene.add(m); pool.push(m); }
+const shards = [];
+function explode(y) { for (let x = 0; x < W; x++) for (let j = 0; j < 3; j++) { const m = new THREE.Mesh(new THREE.BoxGeometry(.3, .3, .3), mats[board[y][x]]); m.position.set(x - W / 2 + .5, H - 1 - y + .5, 0);
+  m.userData.v = new THREE.Vector3((Math.random() - .5) * 9, Math.random() * 6, (Math.random() - .3) * 8); m.userData.life = .8; scene.add(m); shards.push(m); } }
+const nextBox = new THREE.Group(); nextBox.position.set(W / 2 + 3.9, 15.6, 0); scene.add(nextBox);
+nextBox.add(new THREE.Mesh(new THREE.PlaneGeometry(5.2, 5.6), new THREE.MeshStandardMaterial({ color: 0x0d1424 })));
+for (const [x, y, w, h] of [[-2.6, 0, .12, 5.6], [2.6, 0, .12, 5.6], [0, 2.8, 5.32, .12], [0, -2.8, 5.32, .12]]) { const e = new THREE.Mesh(new THREE.BoxGeometry(w, h, .5), edgeMat); e.position.set(x, y, .1); nextBox.add(e); }
+const nextCubes = []; for (let i = 0; i < 4; i++) { const m = new THREE.Mesh(geo, mats.T); nextBox.add(m); nextCubes.push(m); }
+
+// ── 状态 ────────────────────────────────────────────────────────────
+let piece = null, next = nextShape(), x0 = 3, y0 = -2, rot = 0, score = 0, lines = 0, level = 0, interval = .5, acc = 0, alive = false, soft = false;
+const SCORE = [0, 100, 300, 500, 800]; const msg = document.getElementById('msg'); const $ = id => document.getElementById(id);
+function spawnPiece() { piece = next; next = nextShape(); rot = 0; x0 = 3; y0 = -2; if (!fits(cells(piece, rot), x0, y0)) gameOver(); }
+function gameOver() { alive = false; msg.querySelector('h1').textContent = 'GAME OVER'; msg.querySelector('div').textContent = `得分 ${score} · 消 ${lines} 行 · 按空格再来`; msg.classList.remove('hide'); }
+function reset() { board = Array.from({ length: H }, () => Array(W).fill(null)); score = lines = level = 0; interval = .5; bag = []; next = nextShape(); alive = true; msg.classList.add('hide'); spawnPiece(); }
+function lock() {
+  for (const [x, y] of cells(piece, rot)) if (y0 + y >= 0) board[y0 + y][x0 + x] = piece;
+  let cleared = 0;
+  for (let y = H - 1; y >= 0; y--) if (board[y].every(c => c)) { explode(y); board.splice(y, 1); board.unshift(Array(W).fill(null)); cleared++; y++; }   // 10 格全满 → 消, 上面整体下落
+  score += SCORE[cleared] * (level + 1); lines += cleared;
+  if (lines >= (level + 1) * 10) { level++; interval *= .85; }     // 每 10 行升一级
+  spawnPiece();
+}
+addEventListener('keydown', e => {
+  if (e.code === 'Space') { e.preventDefault(); if (!alive) return reset(); while (fits(cells(piece, rot), x0, y0 + 1)) y0++; lock(); return; }   // 直落
+  if (!alive) return; const cs = cells(piece, rot);
+  if (e.code === 'ArrowLeft' && fits(cs, x0 - 1, y0)) x0--;
+  if (e.code === 'ArrowRight' && fits(cs, x0 + 1, y0)) x0++;
+  if (e.code === 'ArrowUp') { const r = (rot + 1) % 4, rc = cells(piece, r); for (const dx of [0, -1, 1, -2, 2]) if (fits(rc, x0 + dx, y0)) { rot = r; x0 += dx; break; } }   // 转不动就往旁边挪一格试试
+  if (e.code === 'ArrowDown') soft = true;
+});
+addEventListener('keyup', e => { if (e.code === 'ArrowDown') soft = false; });
+
+// ── 每一帧 ──────────────────────────────────────────────────────────
+let last = performance.now(), t = 0;
+function frame(now) {
+  const dt = Math.min(.05, (now - last) / 1000); last = now; t += dt;
+  if (alive) { acc += dt * (soft ? 8 : 1); if (acc >= interval) { acc = 0; if (fits(cells(piece, rot), x0, y0 + 1)) y0++; else lock(); } }   // 能往下就往下, 到底就固定
+  let used = 0; const put = (x, y, mat) => { const m = pool[used++]; if (!m) return; m.visible = true; m.material = mat; m.position.set(x - W / 2 + .5, H - 1 - y + .5, 0); };
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (board[y][x]) put(x, y, mats[board[y][x]]);
+  if (alive) {
+    let gy = y0; while (fits(cells(piece, rot), x0, gy + 1)) gy++;                         // 落点虚影
+    for (const [x, y] of cells(piece, rot)) { if (gy + y >= 0) put(x0 + x, gy + y, ghostMats[piece]); if (y0 + y >= 0) put(x0 + x, y0 + y, mats[piece]); }
+  }
+  for (let k = used; k < pool.length; k++) pool[k].visible = false;
+  for (let i = shards.length - 1; i >= 0; i--) { const s = shards[i]; s.userData.v.y -= 20 * dt; s.position.addScaledVector(s.userData.v, dt); s.rotation.x += dt * 6; s.userData.life -= dt; s.scale.setScalar(Math.max(.01, s.userData.life / .8)); if (s.userData.life <= 0) { scene.remove(s); shards.splice(i, 1); } }
+  const n = SHAPES[next].n; cells(next, 0).forEach(([x, y], j) => nextCubes[j].position.set((x - n / 2 + .5) * .85, -(y - n / 2 + .5) * .85 - .35, .55)); nextCubes.forEach(m => { m.material = mats[next]; m.scale.setScalar(.78); });
+  const a = Math.sin(t * .13) * .42, r = 34.5; camera.position.set(Math.sin(a) * r, 13.5, Math.cos(a) * r); camera.lookAt(0, 10.2, 0);   // 绕着井转的相机
+  $('score').textContent = score; $('lines').textContent = lines; $('level').textContent = level + 1;
+  renderer.render(scene, camera); requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
