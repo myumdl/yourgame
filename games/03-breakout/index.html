@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>3D 打砖块 · yourgame</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  html,body{margin:0;height:100%;background:#04050c;overflow:hidden;font-family:Menlo,monospace;color:#fff}
+  #hud{position:fixed;left:20px;top:16px;font-size:18px;color:#9db4e6;display:flex;gap:26px;text-shadow:0 2px 8px #000}#hud b{color:#fff;font-size:24px;margin-left:8px}
+  #msg{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;background:rgba(4,5,12,.6);font-size:20px;text-align:center}
+  #msg h1{font-size:44px;margin:0;color:#ffd60a}#msg.hide{display:none}#msg small{color:#9db4e6}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud"><div>SCORE<b id="score">0</b></div><div>BALLS<b id="nballs">1</b></div><div>LIVES<b id="lives">3</b></div></div>
+<div id="msg"><h1>3D 打砖块</h1><div>← → 或 鼠标 移动挡板 · 打中金砖, 一个球变三个</div><div>按 <b>空格</b> 开始</div><small>yourgame · 视频 G03 · 约 150 行</small></div>
+<script type="module">
+import * as THREE from '../../vendor/three.module.js';
+import { RoundedBoxGeometry } from '../../vendor/addons/geometries/RoundedBoxGeometry.js';
+
+// ── 1 场地: 三面墙 + 一块挡板 ────────────────────────────────────────
+const W = 18, H = 20, R = .32, PW = 3.8, PH = .5, PY = 1, BW = 1.84, BH = .78, SPEED = 15;
+const COLORS = [0xff3b3b, 0xff8c1a, 0xffd60a, 0x22c55e, 0x34d2ff, 0xa855f7];
+const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: true });
+renderer.setSize(innerWidth, innerHeight); renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); renderer.toneMapping = THREE.ACESFilmicToneMapping;
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x0a0d2a);
+const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, .1, 300);
+function fit() { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.position.set(0, 4.6, Math.max(31.5, 15.5 / camera.aspect)); camera.lookAt(0, 10.15, 0); camera.updateProjectionMatrix(); }
+addEventListener('resize', fit); fit();
+scene.add(new THREE.HemisphereLight(0x8fa8ff, 0x140a2a, .4));
+const key = new THREE.DirectionalLight(0xffffff, 1.7); key.position.set(6, 16, 26); scene.add(key);
+const rimL = new THREE.DirectionalLight(0xff4fb0, .9); rimL.position.set(-24, 6, 8); scene.add(rimL);
+const rimR = new THREE.DirectionalLight(0x3fd8ff, .9); rimR.position.set(24, 10, 8); scene.add(rimR);
+const back = new THREE.Mesh(new THREE.PlaneGeometry(W, H), new THREE.MeshBasicMaterial({ color: 0x050818 })); back.position.set(0, H / 2, -.7); scene.add(back);
+const gp = []; for (let x = 0; x <= W; x += 2) gp.push(x - W / 2, 0, -.66, x - W / 2, H, -.66); for (let y = 0; y <= H; y += 2) gp.push(-W / 2, y, -.66, W / 2, y, -.66);
+scene.add(new THREE.LineSegments(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(gp, 3)), new THREE.LineBasicMaterial({ color: 0x23408f })));
+const wallMat = new THREE.MeshStandardMaterial({ color: 0x1390c2, emissive: 0x22b8ee, emissiveIntensity: .85 });
+for (const x of [-W / 2 - .1, W / 2 + .1]) { const e = new THREE.Mesh(new THREE.BoxGeometry(.2, H + .2, .5), wallMat); e.position.set(x, H / 2 + .1, 0); scene.add(e); }
+const wallTop = new THREE.Mesh(new THREE.BoxGeometry(W + .4, .2, .5), wallMat); wallTop.position.set(0, H + .1, 0); scene.add(wallTop);
+const paddle = new THREE.Mesh(new RoundedBoxGeometry(PW, PH, 1.1, 3, .22), new THREE.MeshStandardMaterial({ color: 0xd8f6ff, emissive: 0x34d2ff, emissiveIntensity: .7 })); paddle.position.y = PY; scene.add(paddle);
+
+// ── 2 球: 位置 + 速度, 每个球一种颜色, 带光晕 ─────────────────────────
+const dot = (() => { const c = document.createElement('canvas'); c.width = c.height = 128; const g = c.getContext('2d'); const rg = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  rg.addColorStop(0, 'rgba(255,255,255,1)'); rg.addColorStop(.3, 'rgba(255,255,255,.6)'); rg.addColorStop(1, 'rgba(255,255,255,0)'); g.fillStyle = rg; g.fillRect(0, 0, 128, 128); return new THREE.CanvasTexture(c); })();
+const BALLCOL = [0x5fe6ff, 0xff5fd0, 0xffe14a, 0x7dff6a, 0xffa04a, 0xb48cff, 0xffffff];
+const ballGeo = new THREE.SphereGeometry(R, 24, 16), ballMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 2.2 });
+let balls = [], nextId = 0;
+function addBall(x, y, vx, vy) {
+  const m = new THREE.Mesh(ballGeo, ballMat); const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: dot, color: BALLCOL[nextId++ % 7], transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+  halo.scale.setScalar(2.2); m.add(halo); scene.add(m); const b = { m, x, y, vx, vy }; fixV(b); balls.push(b); return b;
+}
+function fixV(b) {                                     // 保持速率, 且不许太平 (否则左右来回磨)
+  const min = .3 * SPEED; if (Math.abs(b.vy) < min) b.vy = (b.vy < 0 ? -1 : 1) * min;
+  b.vx = (b.vx < 0 ? -1 : 1) * Math.sqrt(Math.max(0, SPEED * SPEED - b.vy * b.vy));
+}
+
+// ── 4 砖块: 六排九列, 其中几块是金砖 ─────────────────────────────────
+const brickGeo = new RoundedBoxGeometry(BW, BH, 1.05, 4, .14);
+const rowMats = COLORS.map(c => new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: .22, roughness: .32 }));
+const goldMat = new THREE.MeshStandardMaterial({ color: 0xffd24a, emissive: 0xffa800, emissiveIntensity: .7, roughness: .2, metalness: .5 });
+let bricks = [];
+function buildWall() {
+  for (const b of bricks) scene.remove(b.m); bricks = [];
+  for (let r = 0; r < 6; r++) for (let c = 0; c < 9; c++) {
+    const gold = Math.random() < .12; const m = new THREE.Mesh(brickGeo, gold ? goldMat : rowMats[r]); m.position.set(c * 2 - 8, 17.6 - r, 0); scene.add(m);
+    bricks.push({ m, x: c * 2 - 8, y: 17.6 - r, r, gold, alive: true });
+  }
+}
+
+// ── 5 爆炸: 每块砖炸 8 片 ────────────────────────────────────────────
+const shardGeo = new THREE.BoxGeometry(.34, .34, .34); const shards = []; let shake = 0;
+function explode(b) {
+  for (let i = 0; i < 8; i++) { const m = new THREE.Mesh(shardGeo, b.m.material); m.position.set(b.x + (Math.random() - .5) * BW, b.y, 0);
+    m.userData = { v: new THREE.Vector3((Math.random() - .5) * 16, Math.random() * 9, (Math.random() - .2) * 11), life: .8 }; scene.add(m); shards.push(m); }
+  shake = b.gold ? .5 : .3;
+}
+
+// ── 状态 + 输入 ──────────────────────────────────────────────────────
+let px = 0, score = 0, lives = 3, alive = false, left = false, right = false, t = 0;
+const msg = document.getElementById('msg'), $ = id => document.getElementById(id);
+function serve() { addBall(px, PY + PH / 2 + R + .05, SPEED * .45, SPEED); }
+function reset() { for (const b of balls) scene.remove(b.m); balls = []; score = 0; lives = 3; px = 0; buildWall(); serve(); alive = true; msg.classList.add('hide'); }
+function gameOver(win) { alive = false; msg.querySelector('h1').textContent = win ? 'YOU WIN' : 'GAME OVER'; msg.querySelector('div').textContent = `得分 ${score} · 按空格再来`; msg.classList.remove('hide'); }
+addEventListener('keydown', e => { if (e.code === 'Space') { e.preventDefault(); if (!alive) reset(); } if (e.code === 'ArrowLeft') left = true; if (e.code === 'ArrowRight') right = true; });
+addEventListener('keyup', e => { if (e.code === 'ArrowLeft') left = false; if (e.code === 'ArrowRight') right = false; });
+addEventListener('pointermove', e => { if (alive) px = (e.clientX / innerWidth - .5) * (W + 4); });
+
+// ── 每一步物理: 撞墙 → 挡板 → 砖块 (顺序就是开发顺序) ─────────────────
+function step(dt) {
+  const L = W / 2 - R;
+  for (let i = balls.length - 1; i >= 0; i--) {
+    const b = balls[i]; b.x += b.vx * dt; b.y += b.vy * dt;
+    if (b.x > L) { b.x = 2 * L - b.x; b.vx = -Math.abs(b.vx); }                 // 撞墙
+    if (b.x < -L) { b.x = -2 * L - b.x; b.vx = Math.abs(b.vx); }
+    if (b.y > H - R) { b.y = 2 * (H - R) - b.y; b.vy = -Math.abs(b.vy); }        // 撞顶
+    if (b.vy < 0 && b.y - R <= PY + PH / 2 && b.y >= PY - PH / 2 && Math.abs(b.x - px) <= PW / 2 + R) {   // 3 挡板: 打在哪, 决定往哪飞
+      const off = Math.max(-1, Math.min(1, (b.x - px) / (PW / 2))), a = off * Math.PI / 3;                // 最偏 60°
+      b.vx = SPEED * Math.sin(a); b.vy = SPEED * Math.cos(a); b.y = PY + PH / 2 + R; fixV(b);
+    }
+    if (b.y < -1.2) { scene.remove(b.m); balls.splice(i, 1); continue; }         // 掉下去了
+    for (const k of bricks) {                                                    // 圆 vs 矩形: 按穿入较浅的那个轴反弹
+      if (!k.alive) continue;
+      const dx = b.x - k.x, dy = b.y - k.y, ox = BW / 2 + R - Math.abs(dx), oy = BH / 2 + R - Math.abs(dy);
+      if (ox <= 0 || oy <= 0) continue;
+      if (ox < oy) { b.vx = (dx < 0 ? -1 : 1) * Math.abs(b.vx); b.x += (dx < 0 ? -1 : 1) * ox; } else { b.vy = (dy < 0 ? -1 : 1) * Math.abs(b.vy); b.y += (dy < 0 ? -1 : 1) * oy; }
+      fixV(b); k.alive = false; scene.remove(k.m); explode(k); score += 10 * (6 - k.r);
+      if (k.gold && balls.length <= 5) for (const da of [.6, -.6]) addBall(b.x, b.y, b.vx * Math.cos(da) - b.vy * Math.sin(da), b.vx * Math.sin(da) + b.vy * Math.cos(da));   // 6 金砖: 一个球变三个
+      break;
+    }
+  }
+  if (!balls.length) { if (--lives > 0) serve(); else gameOver(false); }
+  else if (bricks.every(k => !k.alive)) gameOver(true);
+}
+
+// ── 每一帧 ──────────────────────────────────────────────────────────
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(.05, (now - last) / 1000); last = now; t += dt;
+  if (alive) { px += ((right ? 1 : 0) - (left ? 1 : 0)) * 26 * dt; px = Math.max(-(W / 2 - PW / 2), Math.min(W / 2 - PW / 2, px)); for (let s = 0; s < 4; s++) if (alive) step(dt / 4); }
+  paddle.position.x = px; for (const b of balls) b.m.position.set(b.x, b.y, 0);
+  for (const k of bricks) if (k.alive && k.gold) k.m.scale.setScalar(1 + .06 * Math.sin(t * 9 + k.x));
+  for (let i = shards.length - 1; i >= 0; i--) { const s = shards[i], u = s.userData; u.v.y -= 26 * dt; s.position.addScaledVector(u.v, dt); s.rotation.x += dt * 9; s.rotation.y += dt * 7; u.life -= dt; s.scale.setScalar(Math.max(.01, u.life / .8)); if (u.life <= 0) { scene.remove(s); shards.splice(i, 1); } }
+  shake = Math.max(0, shake - dt); camera.position.x = Math.sin(t * .22) * 2.4 + Math.sin(t * 91) * .1 * shake / .3; camera.lookAt(0, 10.15, 0);
+  $('score').textContent = score; $('nballs').textContent = balls.length; $('lives').textContent = lives;
+  renderer.render(scene, camera); requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
