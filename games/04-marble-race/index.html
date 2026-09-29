@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>编程语言弹珠赛 · yourgame</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  html,body{margin:0;height:100%;background:#05060e;overflow:hidden;font-family:"PingFang SC","Microsoft YaHei",sans-serif;color:#fff}
+  #rank{position:fixed;left:14px;top:14px;width:190px;background:rgba(10,14,40,.8);border-radius:12px;padding:8px 0;font:700 15px Menlo,monospace}
+  #rank div{height:26px;line-height:26px;padding:0 12px;display:flex;gap:8px}#rank i{width:12px;height:12px;border-radius:50%;margin-top:7px}#rank .me{background:rgba(255,214,10,.18)}#rank .out{opacity:.4;text-decoration:line-through}
+  #msg{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;background:rgba(5,6,14,.72);text-align:center;padding:0 16px}
+  #msg h1{font-size:40px;margin:0;color:#ffd60a}#msg.hide{display:none}#msg small{color:#9db4e6}
+  #bets{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;max-width:560px}
+  #bets button{border:0;border-radius:999px;padding:10px 18px;font:800 17px "PingFang SC";cursor:pointer;opacity:.55}#bets button.on{opacity:1;outline:3px solid #fff}
+  #go,#rep{border:0;border-radius:12px;padding:12px 30px;font:900 20px "PingFang SC";background:#ec4899;color:#fff;cursor:pointer}#rep{background:#334155}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="rank"></div>
+<div id="msg"><h1>编程语言弹珠赛</h1><div>先押一门语言, 再开赛。坑会开合: 掉进 <b style="color:#c084fc">内存泄漏</b> 出局, 掉进 <b style="color:#fdba74">git revert</b> 回到上游</div>
+  <div id="bets"></div><div><button id="go">开赛 (每局随机)</button> <button id="rep">回放视频那一局</button></div><div id="res"></div><small>yourgame · 视频 G04 · 约 160 行</small></div>
+<script src="../../vendor/matter.min.js"></script>
+<script type="module">
+import * as THREE from '../../vendor/three.module.js';
+const { Engine, Bodies, Body, Composite } = Matter;
+
+// ── 1 选手: 8 门语言, 每门一颗弹珠 ─────────────────────────────────
+const R = 26, FPS = 60, SUB = 2, CX = 540;
+const LANGS = [['Python', '#3b82f6'], ['Java', '#f97316'], ['JavaScript', '#facc15'], ['C++', '#a855f7'], ['Go', '#22d3ee'], ['Rust', '#ef4444'], ['PHP', '#ec4899'], ['C', '#e5e7eb']];
+
+// ── 2 赛道: 起跑闸 → 钉板 → 四段折返坡 (两个会开合的坑) → 依赖地狱漏斗 → 冲刺钉板 → 终点 ──
+function course() {
+  const rects = [], pegs = [], spinners = [], zones = [], doors = [];
+  const seg = (x1, y1, x2, y2, tag = 'ramp', th = 18) => rects.push({ x: (x1 + x2) / 2, y: (y1 + y2) / 2, w: Math.hypot(x2 - x1, y2 - y1), h: th, a: Math.atan2(y2 - y1, x2 - x1), tag });
+  const slope = (xa, ya, xb, yb, holes = []) => {               // 一段坡, 按 x 挖洞
+    const y = (x) => ya + (yb - ya) / (xb - xa) * (x - xa), xs = [xa, ...holes.flat(), xb].sort((p, q) => (xa < xb ? p - q : q - p));
+    for (let i = 0; i < xs.length; i += 2) seg(xs[i], y(xs[i]), xs[i + 1], y(xs[i + 1]));
+  };
+  const door = (xa, ya, xb, yb, x0, x1, tag, period, open, phase) => { const y = (x) => ya + (yb - ya) / (xb - xa) * (x - xa);   // 坑口翻板: 周期开合
+    doors.push({ x: (x0 + x1) / 2, y: (y(x0) + y(x1)) / 2, w: Math.abs(x1 - x0) + 4, h: 14, a: Math.atan2(y(x1) - y(x0), x1 - x0), tag, period, open, phase }); };
+  seg(30, -400, 30, 4700, 'wall', 24); seg(1050, -400, 1050, 4700, 'wall', 24); seg(30, 190, 1050, 190, 'gate', 14);
+  for (let r = 0; r < 11; r++) for (let k = 0; k < 9; k++) { const x = (r % 2 ? 150 : 90) + k * 120; if (x <= 1000) pegs.push({ x, y: 360 + r * 96, r: 12 }); }
+  slope(40, 1440, 930, 1660);
+  slope(1040, 1800, 150, 2020); spinners.push({ x: 560, y: 1818, len: 190, th: 16, w: 2.6 });            // while(true) 死循环
+  slope(40, 2120, 930, 2340, [[540, 620]]); door(40, 2120, 930, 2340, 540, 620, 'leak', 2.3, 0.75, 0.4); zones.push({ tag: 'leak', x: 580, y: 2380, w: 80, h: 50 });
+  slope(1040, 2480, 150, 2700, [[470, 550]]); door(1040, 2480, 150, 2700, 470, 550, 'revert', 1.9, 0.7, 1.1); zones.push({ tag: 'revert', x: 510, y: 2720, w: 80, h: 60 });
+  seg(40, 2800, 488, 3180, 'funnel'); seg(1040, 2800, 592, 3180, 'funnel'); spinners.push({ x: 540, y: 3050, len: 150, th: 14, w: -1.9 });   // 依赖地狱
+  for (let r = 0; r < 5; r++) for (let k = 0; k < 9; k++) { const x = (r % 2 ? 210 : 150) + k * 120; if (x <= 960) pegs.push({ x, y: 3320 + r * 100, r: 12 }); }
+  zones.push({ tag: 'finish', x: 540, y: 3860, w: 1000, h: 20 });
+  seg(40, 3960, 480, 4160, 'tray'); seg(1040, 3960, 600, 4160, 'tray'); seg(470, 4220, 610, 4220, 'tray');
+  return { rects, pegs, spinners, zones, doors };
+}
+const C = course();
+
+// ── 3 物理: matter-js, 固定步长 (同一浏览器里同一个 seed 是同一局; 换 JS 引擎浮点有细微差别, 十几秒后会分叉) ──
+let race = null;
+function newRace(seed) {
+  let s = seed >>> 0; const rnd = () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; };
+  const engine = Engine.create({ gravity: { x: 0, y: 1, scale: 0.0012 } }); engine.positionIterations = 10; engine.velocityIterations = 8;
+  const W = engine.world, statics = []; let gate = null;
+  for (const r of C.rects) { const b = Bodies.rectangle(r.x, r.y, r.w, r.h, { isStatic: true, angle: r.a, friction: 0.02, restitution: 0.3, label: r.tag }); statics.push(b); if (r.tag === 'gate') gate = b; }
+  for (const p of C.pegs) statics.push(Bodies.circle(p.x, p.y, p.r, { isStatic: true, restitution: 0.55, friction: 0.01, label: 'peg' }));
+  const spin = C.spinners.map(sp => Bodies.rectangle(sp.x, sp.y, sp.len, sp.th, { isStatic: true, restitution: 0.6, friction: 0.05, label: 'spin' }));
+  const doors = C.doors.map(d => Bodies.rectangle(d.x, d.y, d.w, d.h, { isStatic: true, angle: d.a, friction: 0.02, restitution: 0.3, label: 'door' }));
+  Composite.add(W, [...statics, ...spin, ...doors]);
+  const order = LANGS.map((_, i) => i); for (let i = order.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }
+  const M = LANGS.map((_, i) => Bodies.circle(150 + order.indexOf(i) * 111 + (rnd() - 0.5) * 6, 150, R, { restitution: 0.45, friction: 0.01, frictionAir: 0.004, density: 0.002, label: 'm' + i }));
+  Composite.add(W, M);
+  return { seed, rnd, engine, W, gate, spin, doors, M, n: 0, t: 0, st: M.map(() => ({ s: 'run' })), finish: [], leak: [] };
+}
+const doorOpen = (d, t) => t > 1 && ((t + d.phase) % d.period) < d.open;
+const inZone = (b, z) => Math.abs(b.position.x - z.x) < z.w / 2 && Math.abs(b.position.y - z.y) < z.h / 2;
+function step(g) {                                                 // 一个物理子步 (1/120 秒)
+  const t = g.t = g.n * (1 / FPS / SUB); g.n++;
+  if (g.gate && t >= 1) { Composite.remove(g.W, g.gate); g.gate = null; }
+  g.doors.forEach((b, j) => { const d = C.doors[j]; Body.setPosition(b, { x: d.x, y: doorOpen(d, t) ? d.y + 5000 : d.y }); });
+  g.spin.forEach((b, j) => { const w = C.spinners[j].w; Body.setAngle(b, w * t); Body.setAngularVelocity(b, w / FPS / SUB); });
+  Engine.update(g.engine, 1000 / FPS / SUB);
+  g.M.forEach((b, i) => {
+    const S = g.st[i]; if (S.s !== 'run') return;
+    for (const z of C.zones) if (inZone(b, z)) {
+      if (z.tag === 'leak') { S.s = 'leak'; g.leak.push(i); Body.setStatic(b, true); Composite.remove(g.W, b); }
+      if (z.tag === 'revert') { Body.setPosition(b, { x: 860 + g.rnd() * 120, y: 1380 }); Body.setVelocity(b, { x: 0, y: 0 }); }
+      if (z.tag === 'finish') { S.s = 'done'; g.finish.push(i); }
+    }
+    if (g.n % (FPS * SUB * 1.2 | 0) === 0) {                      // 防卡死: 1.2 秒几乎没动就推一把
+      if (S.px !== undefined && t > 2.5 && Math.hypot(b.position.x - S.px, b.position.y - S.py) < 12) Body.setVelocity(b, { x: (g.rnd() < 0.5 ? -1 : 1) * (2 + g.rnd() * 3), y: -2 });
+      S.px = b.position.x; S.py = b.position.y;
+    }
+  });
+}
+const ranking = (g) => [...g.finish, ...LANGS.map((_, i) => i).filter(i => g.st[i].s === 'run').sort((a, b) => g.M[b].position.y - g.M[a].position.y), ...[...g.leak].reverse()];
+
+// ── 4 画面: Three.js, 赛道是 2D 物理 + 3D 外观 ──────────────────────
+const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); renderer.toneMapping = THREE.ACESFilmicToneMapping;
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x0a0d2a);
+const camera = new THREE.PerspectiveCamera(30, 1, 10, 12000);
+scene.add(new THREE.HemisphereLight(0x9fb4ff, 0x1a0c30, 0.8)); const key = new THREE.DirectionalLight(0xffffff, 1.8); key.position.set(300, 500, 1200); scene.add(key);
+const P = (x, y, z = 0) => new THREE.Vector3(x - CX, -y, z), D = 70;
+const mat = (c, e, k = 0.6) => new THREE.MeshStandardMaterial({ color: c, emissive: e, emissiveIntensity: k, roughness: 0.35 });
+const MAT = { wall: mat(0x0f3a5c, 0x22b8ee, 0.9), ramp: mat(0x1b2a6b, 0x3f7dff), funnel: mat(0x2a1b5c, 0x9a5cff), tray: mat(0x5c4312, 0xffb020), gate: mat(0xdddddd, 0xffffff, 0.8) };
+let gateMesh;
+for (const r of C.rects) { const m = new THREE.Mesh(new THREE.BoxGeometry(r.w, r.h, D), MAT[r.tag] || MAT.ramp); m.position.copy(P(r.x, r.y)); m.rotation.z = -r.a; scene.add(m); if (r.tag === 'gate') gateMesh = m; }
+const pegGeo = new THREE.SphereGeometry(12, 16, 12), pegMat = [mat(0xff5fd0, 0xff3fb8, 0.9), mat(0x5fe6ff, 0x2fd0ff, 0.9)];
+C.pegs.forEach((p, i) => { const m = new THREE.Mesh(pegGeo, pegMat[i % 2]); m.position.copy(P(p.x, p.y)); scene.add(m); });
+const spinMesh = C.spinners.map(sp => { const m = new THREE.Mesh(new THREE.BoxGeometry(sp.len, sp.th, D * 0.8), mat(0xff3b3b, 0xff2a2a, 1.1)); m.position.copy(P(sp.x, sp.y)); scene.add(m); return m; });
+const doorMesh = C.doors.map(d => { const m = new THREE.Mesh(new THREE.BoxGeometry(d.w, d.h, D * 0.9), d.tag === 'leak' ? mat(0x7c3aed, 0xa855f7, 1) : mat(0xf97316, 0xff9a3c, 1)); m.position.copy(P(d.x, d.y)); m.rotation.z = -d.a; scene.add(m); return m; });
+const label = (text, bg, fg = '#fff', fs = 34) => {               // 文字牌 (canvas 贴图)
+  const c = document.createElement('canvas'), g = c.getContext('2d'); g.font = `900 ${fs}px "PingFang SC",sans-serif`; c.width = g.measureText(text).width + 28; c.height = fs * 1.5;
+  g.fillStyle = bg; g.beginPath(); g.roundRect(0, 0, c.width, c.height, 16); g.fill(); g.font = `900 ${fs}px "PingFang SC",sans-serif`; g.fillStyle = fg; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(text, c.width / 2, c.height / 2 + 2);
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false })); s.scale.set(c.width * 0.9, c.height * 0.9, 1); s.renderOrder = 9; scene.add(s); return s;
+};
+[['while(true) 死循环', 560, 1700], ['内存泄漏 Memory Leak', 800, 2420], ['git revert ↩ 回到上游', 770, 2680], ['依赖地狱 node_modules', 860, 2870], ['FINISH 终点', 540, 3920]].forEach(([t, x, y]) => label(t, 'rgba(8,10,28,.85)', '#ffd6a8', 30).position.copy(P(x, y, 60)));
+const balls = LANGS.map(([, col]) => { const m = new THREE.Mesh(new THREE.SphereGeometry(R, 32, 20), new THREE.MeshStandardMaterial({ color: col, emissive: col, emissiveIntensity: 0.3, roughness: 0.2 })); scene.add(m); return m; });
+const tags = LANGS.map(([name, col]) => label(name, col, ['JavaScript', 'C', 'Go'].includes(name) ? '#111' : '#fff'));
+
+// ── 5 下注 + 开赛 + 结算 ───────────────────────────────────────────
+let bet = 6, camY = 217, acc = 0, last = 0, over = false;
+const $ = (id) => document.getElementById(id);
+LANGS.forEach(([name, col], i) => { const b = document.createElement('button'); b.textContent = name; b.style.background = col; b.style.color = ['JavaScript', 'C', 'Go'].includes(name) ? '#111' : '#fff'; b.onclick = () => { bet = i; [...$('bets').children].forEach((x, k) => x.classList.toggle('on', k === i)); }; $('bets').append(b); });
+$('bets').children[bet].classList.add('on');
+const start = (g) => { race = g; $('msg').classList.add('hide'); over = false; acc = 0; last = performance.now(); };
+$('go').onclick = () => start(newRace(Math.floor(Math.random() * 1e6)));
+$('rep').onclick = async () => {                                   // 回放: 视频那一局是离线跑的, 这里按录下的轨迹播 (不重算物理)
+  const d = await (await fetch('replay-g04.json')).json();
+  start({ replay: d, seed: '视频 G04', t: 0, M: LANGS.map(() => ({ position: { x: 0, y: 0 }, angle: 0 })), st: LANGS.map(() => ({ s: 'run' })), spin: C.spinners.map(() => ({ angle: 0 })), finish: [], leak: [] });
+};
+function replayTo(g, t) {
+  const d = g.replay, f = Math.min(d.frames.length - 1.001, t * d.fps), i = Math.floor(f), k = f - i, a = d.frames[i], b = d.frames[i + 1];
+  g.t = t; g.M.forEach((m, j) => { const q = j * 3, far = Math.abs(b[q + 1] - a[q + 1]) > 100; m.position.x = far ? a[q] : a[q] + (b[q] - a[q]) * k; m.position.y = far ? a[q + 1] : a[q + 1] + (b[q + 1] - a[q + 1]) * k; m.angle = a[q + 2]; });
+  g.spin.forEach((s, j) => { s.angle = C.spinners[j].w * t; });
+  for (const [j, tt] of d.leak) if (tt <= t && !g.leak.includes(j)) { g.leak.push(j); g.st[j].s = 'leak'; }
+  for (const [j, tt] of d.finish) if (tt <= t && !g.finish.includes(j)) { g.finish.push(j); g.st[j].s = 'done'; }
+}
+function settle(g) {
+  over = true; const r = ranking(g), me = r.indexOf(bet), n = LANGS[bet][0];
+  $('res').innerHTML = `<h2 style="margin:6px 0">冠军 ${LANGS[r[0]][0]}</h2>${g.leak.includes(bet) ? `你押的 ${n} 掉进了内存泄漏` : `你押的 ${n} 第 ${me + 1} 名`} · ${g.replay ? "视频那一局 (回放)" : "seed " + g.seed}`;
+  $('go').textContent = '再来一局 (随机)'; $('msg').classList.remove('hide');
+}
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (renderer.domElement.width !== innerWidth * renderer.getPixelRatio()) { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; }
+  const g = race;
+  if (g && !over) { acc += Math.min(0.1, (now - last) / 1000); last = now;
+    if (g.replay) { replayTo(g, g.t + acc); acc = 0; } else while (acc >= 1 / FPS / SUB) { step(g); acc -= 1 / FPS / SUB; }
+    if (g.finish.length >= 3 || g.t > 70 || !g.st.some(x => x.s === 'run')) settle(g); }
+  gateMesh.visible = !g || g.t < 1;
+  if (g) { spinMesh.forEach((m, j) => { m.rotation.z = -g.spin[j].angle; }); doorMesh.forEach((m, j) => { m.visible = !doorOpen(C.doors[j], g.t); }); }
+  LANGS.forEach((_, i) => { const b = g ? g.M[i] : null, x = b ? b.position.x : 150 + i * 111, y = b ? b.position.y : 150, out = g && g.st[i].s === 'leak';
+    balls[i].visible = !out; balls[i].position.copy(P(x, y)); balls[i].rotation.z = b ? -b.angle : 0; tags[i].visible = !out; tags[i].position.copy(P(x, y - 60, 60)); });
+  const r = g ? ranking(g) : LANGS.map((_, i) => i);                // 相机跟领先者; 左上角实时排名
+  const lead = g ? (r.find(i => g.st[i].s === 'run') ?? r[0]) : 0, ty = g ? Math.min(3750, Math.max(217, g.M[lead].position.y + 180)) : 217;
+  camY += (ty - camY) * 0.06; const vh = Math.max(1920, 1100 / camera.aspect);
+  camera.position.set(0, -camY + 60, (vh / 2) / Math.tan(Math.PI / 12)); camera.lookAt(0, -camY, 0); camera.updateProjectionMatrix();
+  $('rank').innerHTML = r.map((i, k) => `<div class="${i === bet ? 'me' : ''} ${g && g.st[i].s === 'leak' ? 'out' : ''}"><span>${k + 1}</span><i style="background:${LANGS[i][1]}"></i>${LANGS[i][0]}</div>`).join('');
+  renderer.render(scene, camera);
+}
+requestAnimationFrame(frame);
+window.__race = (seed) => { const g = newRace(seed); while (g.finish.length < 3 && g.t < 70) step(g); return g.finish.map(i => LANGS[i][0]); };   // 控制台自检: __race(123) 连跑两次结果相同
+</script>
+</body>
+</html>
