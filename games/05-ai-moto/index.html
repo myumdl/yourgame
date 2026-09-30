@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>AI 大模型暴力摩托 · yourgame</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  html,body{margin:0;height:100%;background:#05060e;overflow:hidden;font-family:"PingFang SC","Microsoft YaHei",sans-serif;color:#fff}
+  #rank{position:fixed;left:14px;top:14px;width:230px;background:rgba(10,14,40,.8);border-radius:12px;padding:8px 0;font:700 15px Menlo,monospace}
+  #rank div{height:26px;line-height:26px;padding:0 12px;display:flex;gap:8px;align-items:center}#rank i{width:12px;height:12px;border-radius:50%}#rank b{width:78px;font-weight:700}
+  #rank s{display:block;width:70px;height:8px;border-radius:4px;background:rgba(255,255,255,.15);overflow:hidden}#rank s span{display:block;height:100%}
+  #rank .me{background:rgba(255,214,10,.18)}#rank .out{opacity:.4;text-decoration:line-through}
+  #msg{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;background:rgba(5,6,14,.72);text-align:center;padding:0 16px}
+  #msg h1{font-size:40px;margin:0;color:#ff6a3d}#msg.hide{display:none}#msg small{color:#9db4e6}
+  #bets{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;max-width:560px}
+  #bets button{border:0;border-radius:999px;padding:10px 18px;font:800 17px "PingFang SC";cursor:pointer;opacity:.55}#bets button.on{opacity:1;outline:3px solid #fff}
+  #go,#rep{border:0;border-radius:12px;padding:12px 30px;font:900 20px "PingFang SC";background:#ec4899;color:#fff;cursor:pointer}#rep{background:#334155}
+  #feed{position:fixed;left:0;right:0;bottom:8%;text-align:center;font:900 30px "PingFang SC";text-shadow:0 2px 12px #000;pointer-events:none}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="rank"></div><div id="feed"></div>
+<div id="msg"><h1>AI 大模型暴力摩托</h1><div>先押一个模型, 再开赛。并排会出腿 / 抡棍, 挨一下掉一格血, 4 格掉光摔车;<br>撞上 <b style="color:#ffe066">服务器繁忙</b> 卡车、踩到 <b style="color:#c084fc">幻觉</b> 油渍、被 <b style="color:#93c5fd">内容审核</b> 警车拦下, 都算出局</div>
+  <div id="bets"></div><div><button id="go">开赛 (每局随机)</button> <button id="rep">回放视频那一局</button></div><div id="res"></div><small>yourgame · 视频 G05 · 纯物理随机模拟, 不代表模型真实能力</small></div>
+<script type="module">
+import * as THREE from '../../vendor/three.module.js';
+import { RIDERS, runRace } from './sim.js';                       // 比赛逻辑: 开赛前整局先算完, 画面只按时间回放
+
+// ── 1 场景: 夜间公路 + 两侧楼群 + 路灯 ─────────────────────────────
+const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); renderer.toneMapping = THREE.ACESFilmicToneMapping;
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x160b2e); scene.fog = new THREE.Fog(0x1a0b30, 60, 320);
+const camera = new THREE.PerspectiveCamera(62, 1, 0.3, 900);
+scene.add(new THREE.HemisphereLight(0x8fa4ff, 0x2a1030, 1.1)); const moon = new THREE.DirectionalLight(0xc9d4ff, 1.2); moon.position.set(-30, 60, 40); scene.add(moon);
+const W = (x, y, z) => new THREE.Vector3(x, y, -z), LEN = 1150, ROAD = 8;
+const mat = (c, e = 0, k = 0) => new THREE.MeshStandardMaterial({ color: c, emissive: e, emissiveIntensity: k, roughness: 0.5, metalness: 0.3 });
+const box = (w, h, d, m, x, y, z) => { const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); o.position.copy(W(x, y, z)); scene.add(o); return o; };
+const lcg = (s) => () => (s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff, rb = lcg(21);
+box(ROAD * 2 + 1, 0.02, LEN + 340, mat(0x1b1c26), 0, 0, LEN / 2 + 90);
+for (let z = -80; z < LEN + 260; z += 12) for (const x of [-4, 0, 4]) box(0.18, 0.03, 5, mat(0xeeeeee), x, 0.02, z);
+for (const s of [-1, 1]) box(0.25, 0.25, LEN + 340, mat(0x111111, s < 0 ? 0xff3fb8 : 0x2fd0ff, 2.2), s * (ROAD + 0.9), 0.9, LEN / 2 + 90);
+const winMat = [0x7ae1ff, 0xff8ad8, 0xffd27a].map(c => new THREE.MeshStandardMaterial({ color: 0x0b0918, emissive: c, emissiveIntensity: 0.07, roughness: 1 }));   // 楼: 深色 + 一点霓虹底光
+for (let z = -80; z < LEN + 260; z += 10 + rb() * 8) for (const s of [-1, 1]) { const w = 7 + rb() * 10, h = 12 + rb() * 55; box(w, h, 9, winMat[(rb() * 3) | 0], s * (ROAD + 7 + w / 2 + rb() * 8), h / 2, z); }
+for (let z = -80; z < LEN + 260; z += 28) for (const s of [-1, 1]) { box(0.2, 8, 0.2, mat(0x333344), s * (ROAD + 1.8), 4, z); box(1, 0.25, 0.5, mat(0xffffff, 0xffc978, 3), s * (ROAD - 0.2), 7.85, z); }
+box(ROAD * 2 + 1, 0.04, 1.4, mat(0xffffff, 0xffffff, 0.6), 0, 0.03, LEN); box(ROAD * 2 + 3, 1.6, 0.5, mat(0x222233, 0xffd60a, 1.4), 0, 9, LEN);
+const label = (text, bg, fg = '#fff', fs = 40) => {               // 文字牌 (canvas 贴图, 永远朝向镜头)
+  const c = document.createElement('canvas'), g = c.getContext('2d'); g.font = `900 ${fs}px "PingFang SC",sans-serif`; c.width = g.measureText(text).width + 28; c.height = fs * 1.5;
+  g.fillStyle = bg; g.beginPath(); g.roundRect(0, 0, c.width, c.height, 16); g.fill(); g.font = `900 ${fs}px "PingFang SC",sans-serif`; g.fillStyle = fg; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(text, c.width / 2, c.height / 2 + 2);
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false })); s.scale.set(c.width / 70, c.height / 70, 1); s.renderOrder = 9; scene.add(s); return s;
+};
+
+// ── 2 选手: 摩托 + 车手 (出腿 / 抡棍用两个可转的关节) ─────────────
+const bikes = RIDERS.map(R => {
+  const g = new THREE.Group(), m = mat(R.color, R.color, 0.35); scene.add(g);
+  const add = (w, h, d, mm, x, y, z) => { const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mm); o.position.set(x, y, z); g.add(o); return o; };
+  for (const z of [-0.78, 0.78]) { const t = new THREE.Mesh(new THREE.TorusGeometry(0.34, 0.12, 8, 20), mat(0x0a0a0a)); t.rotation.y = Math.PI / 2; t.position.set(0, 0.46, z); g.add(t); }
+  add(0.46, 0.5, 1.5, m, 0, 0.85, 0); add(0.5, 0.62, 0.34, m, 0, 1.62, 0.12); add(0.28, 0.1, 0.05, mat(0x330000, 0xff2020, 5), 0, 1, 0.76);
+  const helm = new THREE.Mesh(new THREE.SphereGeometry(0.22, 14, 10), m); helm.position.set(0, 2.05, 0); g.add(helm);
+  const joint = (x, y, z, w, h, d, oy, oz) => { const j = new THREE.Group(); j.position.set(x, y, z); const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(0x1f2937)); o.position.set(0, oy, oz); j.add(o); g.add(j); return j; };
+  const legs = [-1, 1].map(s => joint(s * 0.22, 1.32, 0.18, 0.16, 0.7, 0.18, -0.33, 0)), arms = [-1, 1].map(s => joint(s * 0.3, 1.82, 0, 0.1, 0.1, 1.3, -0.1, -0.6));
+  return { g, legs, arms, tag: label(R.tag, R.color, ['DeepSeek', 'Kimi', '智谱GLM'].includes(R.name) ? '#111' : '#fff') };
+});
+const traffic = [], police = new THREE.Group(); scene.add(police);
+{ const b = new THREE.Mesh(new THREE.BoxGeometry(2, 0.9, 4.8), mat(0xf3f4f6)); b.position.y = 0.72; police.add(b); const l = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.2, 0.4), mat(0x220000, 0xff2020, 6)); l.position.y = 1.3; police.add(l); police.userData.light = l; }
+const policeTag = label('内容审核', 'rgba(29,78,216,.92)');
+
+// ── 3 开赛: 整局先用 sim.js 算完 (几十毫秒), 再按真实时间回放 ────────
+let bet = 0, R = null, t0 = 0, done = false, camZ = 0, camX = 0;
+function start(seed) {
+  R = runRace(seed); t0 = performance.now(); done = false; camZ = 0; camX = 0;
+  traffic.forEach(o => { scene.remove(o.m); if (o.tag) scene.remove(o.tag); }); traffic.length = 0;
+  R.traffic.forEach(o => { const m = new THREE.Group(); const b = new THREE.Mesh(new THREE.BoxGeometry(o.kind === 'truck' ? 2.5 : 1.9, o.kind === 'truck' ? 3.4 : 1.2, o.len), mat(o.kind === 'truck' ? 0xd7dae6 : 0x60a5fa)); b.position.y = o.kind === 'truck' ? 2 : 0.8; m.add(b); scene.add(m); traffic.push({ m, tag: o.kind === 'truck' ? label('服务器繁忙', '#2b2f45', '#ffe066', 34) : null }); });
+  R.oils.forEach(o => { const m = new THREE.Mesh(new THREE.CircleGeometry(o.r * 1.3, 24), mat(0x0b0614, 0x7c3aed, 0.6)); m.rotation.x = -Math.PI / 2; m.position.copy(W(o.x, 0.04, o.z)); scene.add(m); traffic.push({ m, fixed: true, tag: label('幻觉', 'rgba(40,10,70,.9)', '#e9d5ff', 34) }); traffic.at(-1).tag.position.copy(W(o.x, 2.4, o.z)); });
+  document.getElementById('msg').classList.add('hide');
+}
+const WHY = { kick: '被踹下车', club: '被一棍打下车', truck: '撞上服务器繁忙', car: '撞车', oil: '踩到幻觉摔了', police: '被内容审核拦下' };
+function frame(now) {
+  requestAnimationFrame(frame);
+  const w = innerWidth, h = innerHeight; if (renderer.domElement.width !== w * renderer.getPixelRatio()) { renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix(); }
+  if (!R) { camera.position.set(0, 7, -16); camera.lookAt(0, 1, 30 * -1); renderer.render(scene, camera); return; }
+  const s = Math.min((now - t0) / 1000, R.T - 0.02), f = R.frames[Math.floor(s * R.FPS)];
+  f.tr.forEach((p, k) => traffic[k].m.position.copy(W(p[1], 0, p[0])));
+  R.traffic.forEach((o, k) => { if (traffic[k].tag) traffic[k].tag.position.copy(W(f.tr[k][1], 4.6, f.tr[k][0])); });
+  police.visible = policeTag.visible = f.po[2] > 0; police.position.copy(W(f.po[1], 0, f.po[0])); policeTag.position.copy(W(f.po[1], 3, f.po[0])); police.userData.light.material.emissive.set(Math.floor(s * 6) % 2 ? 0xff2020 : 0x2060ff);
+  f.b.forEach(([z, x, v, lean, st, hp, atk, ph, side, spin], j) => {
+    const B = bikes[j]; B.g.position.copy(W(x, 0, z)); B.g.rotation.set(0, st === 'c' ? spin : 0, st === 'c' ? Math.PI / 2 : lean);
+    B.legs.forEach(l => l.rotation.set(0.5, 0, 0)); B.arms.forEach(a => a.rotation.set(0.35, 0, 0));
+    const k = ph < 0.45 ? -0.4 : ph < 0.62 ? 1.5 : 1.5 * (1 - (ph - 0.62) / 0.38);                    // 蓄力 → 打出去 → 收回
+    if (atk === 1) B.legs[side > 0 ? 1 : 0].rotation.set(0.2, 0, side * k * 1.2); if (atk === 2) B.arms[side > 0 ? 1 : 0].rotation.set(0.35, -side * k * 1.1, 0);
+    B.tag.position.copy(W(x, 3, z)); B.tag.material.opacity = st === 'c' || st === 'p' ? 0.35 : 1;
+  });
+  // 镜头: 追着领先的车群, 平滑跟随
+  const run = R.rank[Math.floor(s * R.FPS)].filter(j => 'rd'.includes(f.b[j][4])).slice(0, 3);
+  const tz = run.length ? f.b[run[0]][0] * 0.6 + run.reduce((a, j) => a + f.b[j][0], 0) / run.length * 0.4 : camZ, tx = run.length ? run.reduce((a, j) => a + f.b[j][1], 0) / run.length * 0.5 : 0;
+  camZ += (tz - camZ) * 0.12; camX += (tx - camX) * 0.05;
+  camera.position.set(camX * 0.6, 5.2, -(camZ - 10.5)); camera.lookAt(camX * 0.85, 1.3, -(camZ + 16));
+  renderer.render(scene, camera);
+  const rk = R.rank[Math.floor(s * R.FPS)];
+  document.getElementById('rank').innerHTML = rk.map((j, n) => { const b = f.b[j], out = 'cp'.includes(b[4]), c = RIDERS[j].color;
+    return `<div class="${j === bet ? 'me' : ''} ${out ? 'out' : ''}">${out ? '✕' : n + 1}<i style="background:${c}"></i><b>${RIDERS[j].tag}</b><s><span style="width:${b[5] / R.HP * 100}%;background:${b[5] <= 1 ? '#ff3b3b' : '#22e07a'}"></span></s></div>`; }).join('');
+  const last = R.ev.crash.filter(e => e.t <= s && s - e.t < 2).at(-1);
+  document.getElementById('feed').textContent = last ? `${RIDERS[last.i].name} ${WHY[last.cause]}` : '';
+  if (!done && s >= R.T - 0.03) {                                  // 结算
+    done = true; const out = R.ev.crash.find(e => e.i === bet), pos = R.ev.finish.findIndex(e => e.i === bet);
+    document.getElementById('res').innerHTML = `冠军 <b style="color:${RIDERS[R.ev.finish[0].i].color}">${RIDERS[R.ev.finish[0].i].name}</b> · 你押的 ${RIDERS[bet].name} ` + (out ? `${WHY[out.cause]}` : `第 ${pos + 1} 名`);
+    document.getElementById('msg').classList.remove('hide');
+  }
+}
+const bets = document.getElementById('bets');
+RIDERS.forEach((r, i) => { const b = document.createElement('button'); b.textContent = r.name; b.style.background = r.color; b.style.color = ['DeepSeek', 'Kimi', '智谱GLM'].includes(r.name) ? '#111' : '#fff'; b.onclick = () => { bet = i; [...bets.children].forEach((x, k) => x.classList.toggle('on', k === i)); }; bets.appendChild(b); });
+bets.children[0].classList.add('on');
+document.getElementById('go').onclick = () => start((Math.random() * 1e9) | 0);
+document.getElementById('rep').onclick = () => start(44);          // 视频 G05 那一局: Kimi 0.09 秒险胜千问
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
