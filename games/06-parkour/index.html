@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>编程语言跑酷淘汰赛 · yourgame</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  html,body{margin:0;height:100%;background:#05081f;overflow:hidden;font-family:"PingFang SC","Microsoft YaHei",sans-serif;color:#fff}
+  #rank{position:fixed;left:14px;top:14px;width:220px;background:rgba(10,14,40,.8);border-radius:12px;padding:8px 0;font:700 15px Menlo,monospace}
+  #rank div{height:26px;line-height:26px;padding:0 12px;display:flex;gap:8px;align-items:center}#rank i{width:12px;height:12px;border-radius:50%}#rank b{width:78px;font-weight:700}#rank em{margin-left:auto;font-style:normal;color:#9db4e6}
+  #rank .me{background:rgba(255,214,10,.18)}#rank .out{opacity:.4;text-decoration:line-through}
+  #msg{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;background:rgba(5,6,14,.72);text-align:center;padding:0 16px}
+  #msg h1{font-size:40px;margin:0;color:#ffd60a}#msg.hide{display:none}#msg small{color:#9db4e6}
+  #bets{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;max-width:560px}
+  #bets button{border:0;border-radius:999px;padding:10px 18px;font:800 17px "PingFang SC";cursor:pointer;opacity:.55}#bets button.on{opacity:1;outline:3px solid #fff}
+  #go,#rep{border:0;border-radius:12px;padding:12px 30px;font:900 20px "PingFang SC";background:#ec4899;color:#fff;cursor:pointer}#rep{background:#334155}
+  #feed{position:fixed;left:0;right:0;bottom:8%;text-align:center;font:900 30px "PingFang SC";text-shadow:0 2px 12px #000;pointer-events:none}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="rank"></div><div id="feed"></div>
+<div id="msg"><h1>编程语言跑酷淘汰赛</h1><div>先押一门语言, 再开赛。8 门语言 8 条道跑 760 米: 跨栏失误摔一跤, 掉进 <b style="color:#e9d5ff">内存泄漏</b> 直接出局, 踩到 <b style="color:#fde68a">git revert</b> 送回上游 45 米, 踩中 <b style="color:#d1fae5">JIT</b> 加速;<br><b style="color:#ff6a6a">每过一个检查点, 当时跑最后的那个被淘汰</b>, 冲线按先后排名</div>
+  <div id="bets"></div><div><button id="go">开赛 (每局随机)</button> <button id="rep">回放视频那一局</button></div><div id="res"></div><small>yourgame · 视频 G06 · 纯物理随机模拟, 不代表语言优劣</small></div>
+<script type="module">
+import * as THREE from '../../vendor/three.module.js';
+import { LANGS, runRace, LEN, TRACK, LANES, CP } from './sim.js';   // 比赛逻辑: 开赛前整局先算完, 画面只按时间回放
+
+// ── 1 场景: 夜场跑道 + 看台 + 灯塔 ───────────────────────────────
+const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); renderer.toneMapping = THREE.ACESFilmicToneMapping;
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x0b1a3a); scene.fog = new THREE.Fog(0x0b1a3a, 70, 340);
+const camera = new THREE.PerspectiveCamera(66, 1, 0.3, 900);
+scene.add(new THREE.HemisphereLight(0x9fb8ff, 0x1a2a40, 1.0)); const sun = new THREE.DirectionalLight(0xfff2dc, 1.4); sun.position.set(-40, 70, 30); scene.add(sun);
+const W = (x, y, z) => new THREE.Vector3(x, y, -z), TR = TRACK, Z0 = -60, Z1 = LEN + 220;
+const mat = (c, e = 0, k = 0) => new THREE.MeshStandardMaterial({ color: c, emissive: e, emissiveIntensity: k, roughness: 0.5, metalness: 0.2 });
+const box = (w, h, d, m, x, y, z, parent = scene) => { const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); o.position.copy(parent === scene ? W(x, y, z) : new THREE.Vector3(x, y, z)); parent.add(o); return o; };
+const lcg = (s) => () => (s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+const tex = (w, h, draw) => { const c = document.createElement('canvas'); c.width = w; c.height = h; draw(c.getContext('2d'), w, h); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t; };
+const trackTex = tex(512, 512, (g, w, h) => { g.fillStyle = '#9b2c2c'; g.fillRect(0, 0, w, h); const r = lcg(3); for (let i = 0; i < 3000; i++) { g.fillStyle = `rgba(255,${120 + r() * 80 | 0},${90 + r() * 60 | 0},${(r() * .14).toFixed(2)})`; g.fillRect(r() * w, r() * h, 2, 2); } g.fillStyle = '#f8fafc'; for (let k = 0; k <= 8; k++) g.fillRect((k / 8) * w - 2, 0, 4, h); });
+trackTex.wrapT = THREE.RepeatWrapping; trackTex.repeat.set(1, (Z1 - Z0) / 16);
+const track = new THREE.Mesh(new THREE.PlaneGeometry(TR * 2, Z1 - Z0), new THREE.MeshStandardMaterial({ map: trackTex, roughness: .9 })); track.rotation.x = -Math.PI / 2; track.position.copy(W(0, 0, (Z0 + Z1) / 2)); scene.add(track);
+const grass = new THREE.Mesh(new THREE.PlaneGeometry(400, Z1 - Z0), mat(0x14532d)); grass.rotation.x = -Math.PI / 2; grass.position.copy(W(0, -.05, (Z0 + Z1) / 2)); scene.add(grass);
+for (const sx of [-1, 1]) { box(.2, .2, Z1 - Z0, mat(0x111111, sx < 0 ? 0x34d2ff : 0xffd60a, 2), sx * (TR + .5), .6, (Z0 + Z1) / 2); const st = box(14, 9, Z1 - Z0, mat(0x1e293b), sx * (TR + 11), 3.5, (Z0 + Z1) / 2); st.rotation.z = sx * .35;
+  for (let z = Z0; z < Z1; z += 60) { box(.4, 24, .4, mat(0x334155), sx * (TR + 4), 12, z); box(3.5, 1, 1, mat(0xffffff, 0xffffff, 3), sx * (TR + 3), 24, z); } }
+const label = (text, bg, fg = '#fff', fs = 40, stroke = null) => {       // 文字牌 (canvas 贴图, 永远朝向镜头)
+  const c = document.createElement('canvas'), g = c.getContext('2d'); g.font = `900 ${fs}px "PingFang SC",sans-serif`; c.width = g.measureText(text).width + 28; c.height = fs * 1.5;
+  if (bg) { g.fillStyle = bg; g.beginPath(); g.roundRect(0, 0, c.width, c.height, 16); g.fill(); if (stroke) { g.strokeStyle = stroke; g.lineWidth = 5; g.stroke(); } }
+  g.font = `900 ${fs}px "PingFang SC",sans-serif`; g.fillStyle = fg; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(text, c.width / 2, c.height / 2 + 2);
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false })); s.scale.set(c.width / 70, c.height / 70, 1); s.renderOrder = 9; scene.add(s); return s;
+};
+const arch = (z, text, col, big) => { const pm = mat(0x222233, col, 1.4), hh = big ? 9 : 7; for (const sx of [-1, 1]) box(.6, hh, .6, pm, sx * (TR + 1), hh / 2, z); box(TR * 2 + 2.6, 1.6, .5, pm, 0, hh, z); label(text, null, '#fff', big ? 60 : 44).position.copy(W(0, hh, z)); };
+arch(3, 'START', 0x34d2ff, true); arch(LEN, 'FINISH 终点', 0xffd60a, true); CP.forEach((z, k) => arch(z, `检查点 ${k + 1} · 最后一名淘汰`, 0xff3b3b, false));
+
+// ── 2 跑者 (胶囊人) + 道具容器 ────────────────────────────────────
+const runners = LANGS.map(L => {
+  const col = new THREE.Color(L.color), bm = mat(col, col, .3), g = new THREE.Group(), body = new THREE.Group(); g.add(body); scene.add(g);
+  const torso = new THREE.Mesh(new THREE.CapsuleGeometry(.28, .6, 6, 12), bm); torso.position.y = 1.15; body.add(torso);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(.24, 16, 12), mat(0xf1c9a5)); head.position.y = 1.85; body.add(head);
+  const limb = (x, y, len, m) => { const p = new THREE.Group(); p.position.set(x, y, 0); const l = new THREE.Mesh(new THREE.CapsuleGeometry(.09, len, 4, 8), m); l.position.y = -len / 2 - .09; p.add(l); body.add(p); return p; };
+  return { g, body, legs: [limb(-.16, .85, .6, mat(0x1f2937)), limb(.16, .85, .6, mat(0x1f2937))], arms: [limb(-.36, 1.45, .5, bm), limb(.36, 1.45, .5, bm)], tag: label(L.tag, L.color, ['JavaScript', 'C', 'Go'].includes(L.name) ? '#111' : '#fff') };
+});
+const props = []; const trap = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 2.6), mat(0x450a0a, 0xff1a1a, 1.2)); trap.rotation.x = -Math.PI / 2; trap.visible = false; scene.add(trap);
+
+// ── 3 开赛: 整局先用 sim.js 算完, 道具按 seed 摆好, 再按真实时间回放 ───
+let bet = 0, R = null, t0 = 0, done = false, camZ = 0, camX = 0, outT = {};
+function start(seed) {
+  R = runRace(seed); t0 = performance.now(); done = false; camZ = 0; camX = 0;
+  props.forEach(o => scene.remove(o)); props.length = 0;
+  const add = (o) => { scene.add(o); props.push(o); return o; }, flat = (w, l, m, x, z) => { const p = new THREE.Mesh(new THREE.PlaneGeometry(w, l), m); p.rotation.x = -Math.PI / 2; p.position.copy(W(x, .05, z)); return add(p); };
+  for (const h of R.hurdles) for (const x of LANES) { const g = new THREE.Group(); for (const sx of [-1, 1]) box(.08, .95, .08, mat(0xf8fafc), sx * .8, .475, 0, g); box(1.8, .12, .12, mat(0xef4444, 0xef4444, .5), 0, .95, 0, g); g.position.copy(W(x, 0, h.z)); add(g); }
+  for (const h of R.holes) { flat(h.w + .8, 3.6, new THREE.MeshBasicMaterial({ color: 0x05000a }), h.x, h.z); props.push(label('内存泄漏 ⚠', 'rgba(40,10,70,.9)', '#e9d5ff', 36, '#a855f7')); props.at(-1).position.copy(W(h.x, 2.6, h.z)); }
+  for (const b of R.belts) { flat(b.w, b.len, mat(0x1f2937, 0xfbbf24, .5), b.x, b.z); props.push(label('git revert ⟲', 'rgba(60,40,0,.9)', '#fde68a', 36, '#fbbf24')); props.at(-1).position.copy(W(b.x, 2.4, b.z)); }
+  for (const p of R.pads) { flat(p.w, p.len, mat(0x064e3b, 0x34d399, 1.8), p.x, p.z); props.push(label('JIT 加速 ⚡', 'rgba(6,78,59,.9)', '#d1fae5', 36, '#34d399')); props.at(-1).position.copy(W(p.x, 2.4, p.z)); }
+  outT = {}; for (const e of R.ev.fall) outT[e.i] = { t: e.t, kind: 'fall', x: e.x, z: e.z }; for (const e of R.ev.elim) outT[e.i] = { t: e.t, kind: 'elim' };
+  document.getElementById('msg').classList.add('hide');
+}
+function frame(now) {
+  requestAnimationFrame(frame);
+  const w = innerWidth, h = innerHeight; if (renderer.domElement.width !== w * renderer.getPixelRatio()) { renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix(); }
+  if (!R) { camera.position.set(0, 7, 16); camera.lookAt(0, 1, -30); renderer.render(scene, camera); return; }
+  const s = Math.min((now - t0) / 1000, R.T - .02), fi = Math.floor(s * R.FPS), f = R.frames[fi];
+  trap.visible = false;
+  f.r.forEach(([z, x, y, v, st, ph], j) => {
+    const Rr = runners[j], o = outT[j], out = st === 'f' || st === 'e';
+    Rr.g.position.copy(W(x, y, z)); Rr.body.rotation.set(y > 0 ? -.25 : (v > 5 ? -.12 : 0), 0, 0); Rr.body.position.set(0, 0, 0);
+    const sw = Math.sin(ph), amp = out ? 0 : Math.min(1, v / 18) * .9;
+    Rr.legs[0].rotation.x = sw * amp; Rr.legs[1].rotation.x = -sw * amp; Rr.arms[0].rotation.x = -sw * amp * .8; Rr.arms[1].rotation.x = sw * amp * .8;
+    if (out) { const e = s - o.t; if (o.kind === 'fall') { Rr.body.position.y = -Math.min(3.5, e * e * 7); Rr.body.rotation.set(Math.min(1.2, e * 4), 0, .3); Rr.g.position.copy(W(o.x, 0, o.z)); }
+      else { Rr.body.position.y = -Math.min(4, e * e * 6); Rr.body.rotation.x = -.4; if (e < 1.6) { trap.visible = true; trap.position.copy(W(x, .06, z)); } } }
+    Rr.tag.visible = !out || s - o.t < 1.6; Rr.tag.position.copy(W(x, 2.75 + y + (out ? Rr.body.position.y : 0), z)); Rr.tag.material.opacity = out ? Math.max(0, 1 - (s - o.t) / 1.6) : 1;
+  });
+  // 镜头: 追着跑在前面的三个人, 平滑跟随
+  const run = R.rank[fi].filter(j => 'r'.includes(f.r[j][4])).slice(0, 3), lead = run.length ? run : [R.rank[fi][0]];
+  const tz = f.r[lead[0]][0] * .6 + lead.reduce((a, j) => a + f.r[j][0], 0) / lead.length * .4, tx = lead.reduce((a, j) => a + f.r[j][1], 0) / lead.length * .5;
+  camZ += (tz - camZ) * .12; camX += (tx - camX) * .05;
+  camera.position.set(camX * .6, 5.2, -(camZ - 10.5)); camera.lookAt(camX * .85, 1.3, -(camZ + 16));
+  renderer.render(scene, camera);
+  const fin = {}; for (const e of R.ev.finish) fin[e.i] = e.t;
+  document.getElementById('rank').innerHTML = R.rank[fi].map((j, n) => { const b = f.r[j], out = b[4] === 'f' || b[4] === 'e';
+    return `<div class="${j === bet ? 'me' : ''} ${out ? 'out' : ''}">${out ? '✕' : n + 1}<i style="background:${LANGS[j].color}"></i><b>${LANGS[j].tag}</b><em>${out ? (outT[j].kind === 'fall' ? '掉坑' : '淘汰') : fin[j] !== undefined && fin[j] <= s ? '完赛' : Math.min(100, b[0] / LEN * 100).toFixed(0) + '%'}</em></div>`; }).join('');
+  const evs = [...R.ev.fall.map(e => ({ t: e.t, m: `${LANGS[e.i].name} 掉进内存泄漏` })), ...R.ev.elim.map(e => ({ t: e.t, m: `检查点 ${e.cp + 1}: ${LANGS[e.i].name} 淘汰` })), ...R.ev.revert.map(e => ({ t: e.t, m: `${LANGS[e.i].name} 被 git revert 送回上游` })), ...R.ev.hurdle.filter(e => !e.ok).map(e => ({ t: e.t + .3, m: `${LANGS[e.i].name} 跨栏摔了一跤` })), ...R.ev.finish.map((e, k) => ({ t: e.t, m: `${LANGS[e.i].name} 第 ${k + 1} 个冲线` }))];
+  const last = evs.filter(e => e.t <= s && s - e.t < 2).sort((a, b) => a.t - b.t).at(-1);
+  document.getElementById('feed').textContent = last ? last.m : '';
+  if (!done && s >= R.T - .03) {                                     // 结算
+    done = true; const win = R.ev.finish[0], pos = R.ev.finish.findIndex(e => e.i === bet), o = outT[bet];
+    document.getElementById('res').innerHTML = `冠军 <b style="color:${LANGS[win.i].color}">${LANGS[win.i].name}</b> · 你押的 ${LANGS[bet].name} ` + (pos >= 0 ? `第 ${pos + 1} 名` : o ? (o.kind === 'fall' ? '掉进内存泄漏' : '检查点被淘汰') : '没跑完');
+    document.getElementById('msg').classList.remove('hide');
+  }
+}
+const bets = document.getElementById('bets');
+LANGS.forEach((L, i) => { const b = document.createElement('button'); b.textContent = L.name; b.style.background = L.color; b.style.color = ['JavaScript', 'C', 'Go'].includes(L.name) ? '#111' : '#fff'; b.onclick = () => { bet = i; [...bets.children].forEach((x, k) => x.classList.toggle('on', k === i)); }; bets.appendChild(b); });
+bets.children[0].classList.add('on');
+document.getElementById('go').onclick = () => start((Math.random() * 1e9) | 0);
+document.getElementById('rep').onclick = () => start(459);         // 视频 G06 那一局: Python 0.08 秒险胜 C++
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

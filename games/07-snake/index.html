@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>编程语言贪吃蛇大逃杀 · yourgame</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  html,body{margin:0;height:100%;background:#05060e;overflow:hidden;font-family:"PingFang SC","Microsoft YaHei",sans-serif;color:#fff}
+  #c{display:block;width:100vw;height:100vh}
+  #rank{position:fixed;left:14px;top:14px;width:280px;background:rgba(10,14,40,.82);border-radius:12px;padding:8px 0;font:700 15px Menlo,monospace}
+  #rank div{height:26px;line-height:26px;padding:0 12px;display:flex;gap:8px;align-items:center}#rank i{width:12px;height:12px;border-radius:50%;flex:none}#rank b{width:110px;font-weight:700;white-space:nowrap;overflow:hidden}#rank em{margin-left:auto;font-style:normal;color:#9db4e6;white-space:nowrap;font-size:13px}
+  #rank .me{background:rgba(255,214,10,.18)}#rank .out{opacity:.4;text-decoration:line-through}
+  #msg{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;background:rgba(5,6,14,.74);text-align:center;padding:0 16px}
+  #msg h1{font-size:40px;margin:0;color:#ff3b5c}#msg.hide{display:none}#msg small{color:#9db4e6}
+  #bets{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;max-width:600px}
+  #bets button{border:0;border-radius:999px;padding:10px 18px;font:800 17px "PingFang SC";cursor:pointer;opacity:.55}#bets button.on{opacity:1;outline:3px solid #fff}#bets button.ghost{background:rgba(255,255,255,.35)!important;border:2px dashed #fff}
+  #go,#rep{border:0;border-radius:12px;padding:12px 30px;font:900 20px "PingFang SC";background:#ec4899;color:#fff;cursor:pointer}#rep{background:#334155}
+  #feed{position:fixed;left:0;right:0;bottom:8%;text-align:center;font:900 30px "PingFang SC";text-shadow:0 2px 12px #000;pointer-events:none}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="rank"></div><div id="feed"></div>
+<div id="msg"><h1>编程语言贪吃蛇大逃杀</h1><div>先押一门语言, 再开赛。10 条蛇在同一片场地吃豆子变长, <b style="color:#ffe066">头撞到别人的身体就出局</b>, 出局的身体化成豆子;<br>红色虚线是不断收缩的安全区, 出圈也算出局。<b style="color:#fff;border:1px dashed #fff;padding:0 6px;border-radius:6px">Whitespace</b> 的代码全是空格, 所以它的蛇是半透明的</div>
+  <div id="bets"></div><div><button id="go">开赛 (每局随机)</button> <button id="rep">回放视频那一局</button></div><div id="res"></div><small>yourgame · 视频 G07 · 纯物理随机模拟, 不代表语言优劣</small></div>
+<script type="module">
+import { LANGS, runRace } from './sim.js';                        // 比赛逻辑: 开赛前整局先算完 (约 1 秒), 画面只按时间回放
+const cv = document.getElementById('c'), g = cv.getContext('2d');
+const hash = (a, b) => { let h = (a * 374761393 + b * 668265263) | 0; h = (h ^ (h >>> 13)) * 1274126177; return ((h ^ (h >>> 16)) >>> 0) / 4294967295; };
+const FOOD_COL = ['#ffd60a', '#34d399', '#f472b6', '#60a5fa'];
+let bet = 0, S = null, t0 = 0, done = false, hist = [], histIdx = [], FOODS = [], outT = {};
+
+// ── 开赛: 算整局, 再按 sim 同一规则重建每条蛇的身体轨迹 (sim 每帧只存头 + 身体点数) ──
+function start(seed) {
+  document.getElementById('res').textContent = '计算这一局…';
+  setTimeout(() => {
+    S = runRace(seed); const N = LANGS.length, SEG = S.SEG;
+    hist = S.path0.map(p => p.slice().reverse()); histIdx = [];
+    for (const fr of S.frames) { const idx = []; for (let j = 0; j < N; j++) { const b = fr.s[j], h = hist[j], last = h[h.length - 1]; if (b[4] && (!last || Math.hypot(last[0] - b[0], last[1] - b[1]) >= SEG)) h.push([b[0], b[1]]); idx.push(h.length); } histIdx.push(idx); }
+    FOODS = S.ev.fs.map(e => ({ id: e[0], t0: e[1], x: e[2], y: e[3], t1: null, by: -1, col: FOOD_COL[e[0] % 4] }));
+    for (const e of S.ev.fe) { const f = FOODS[e[0]]; if (f) { f.t1 = e[1]; f.by = e[2]; } }
+    outT = {}; for (const e of S.ev.out) if (e.cause !== 'win') outT[e.i] = e;
+    t0 = performance.now(); done = false; document.getElementById('msg').classList.add('hide');
+  }, 30);
+}
+const rankAt = (fr) => { const al = [], dead = []; for (let j = 0; j < LANGS.length; j++) (fr.s[j][4] ? al : dead).push(j); al.sort((a, b) => fr.s[b][3] - fr.s[a][3]); dead.sort((a, b) => outT[b].t - outT[a].t); return [...al, ...dead]; };
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  const w = innerWidth, h = innerHeight, dpr = Math.min(devicePixelRatio, 2); if (cv.width !== w * dpr) { cv.width = w * dpr; cv.height = h * dpr; }
+  g.setTransform(dpr, 0, 0, dpr, 0, 0); g.fillStyle = '#05060e'; g.fillRect(0, 0, w, h);
+  if (!S) return;
+  const AW = S.W, AH = S.H, R = S.R, FPS = S.FPS;
+  const s = Math.min((now - t0) / 1000, S.T - 0.02), f = Math.max(0, Math.min(S.frames.length - 1, Math.round(s * FPS))), fr = S.frames[f];
+  // 整个场地放进窗口 (左边留给排名面板)
+  const z = Math.min((w - 270) / AW, (h - 20) / AH); g.translate(270 + ((w - 270) - AW * z) / 2, (h - AH * z) / 2); g.scale(z, z);
+  g.fillStyle = '#0b1020'; g.fillRect(0, 0, AW, AH); g.strokeStyle = 'rgba(120,160,255,.08)'; g.lineWidth = 1;
+  for (let x = 0; x <= AW; x += 60) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, AH); g.stroke(); } for (let y = 0; y <= AH; y += 60) { g.beginPath(); g.moveTo(0, y); g.lineTo(AW, y); g.stroke(); }
+  const shrink = Math.min(0.78, Math.max(0, (s - 8) / 54)), bx0 = 40 + shrink * 330, by0 = 40 + shrink * 480;   // 安全区 (与 sim 同公式)
+  g.fillStyle = 'rgba(255,40,60,.16)'; g.fillRect(0, 0, AW, by0); g.fillRect(0, AH - by0, AW, by0); g.fillRect(0, by0, bx0, AH - 2 * by0); g.fillRect(AW - bx0, by0, bx0, AH - 2 * by0);
+  g.strokeStyle = '#ff3b5c'; g.lineWidth = 4; g.setLineDash([18, 12]); g.strokeRect(bx0, by0, AW - 2 * bx0, AH - 2 * by0); g.setLineDash([]);
+  // 豆子 + 被吃的闪环「+2」
+  for (const fd of FOODS) { if (s < fd.t0 || (fd.t1 !== null && s >= fd.t1)) continue; const k = Math.min(1, (s - fd.t0) / 0.3), pulse = (0.85 + 0.15 * Math.sin(s * 5 + fd.id)) * k;
+    g.fillStyle = fd.col; g.beginPath(); g.arc(fd.x, fd.y, 7.5 * pulse, 0, 6.283); g.fill(); g.fillStyle = 'rgba(255,255,255,.55)'; g.beginPath(); g.arc(fd.x - 2.2, fd.y - 2.2, 2.4 * pulse, 0, 6.283); g.fill(); }
+  for (const fd of FOODS) { if (fd.t1 === null) continue; const e = s - fd.t1; if (e < 0 || e > 0.45) continue; const k = e / 0.45;
+    g.strokeStyle = LANGS[fd.by].color; g.globalAlpha = 1 - k; g.lineWidth = 3; g.beginPath(); g.arc(fd.x, fd.y, 10 + 26 * k, 0, 6.283); g.stroke();
+    g.fillStyle = '#fff'; g.font = '900 22px "PingFang SC",Menlo'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('+2', fd.x, fd.y - 14 - 30 * k); g.globalAlpha = 1; }
+  // 蛇: 身体 (圆珠链) → 头 → 名牌; 出局的 1.2s 内淡出; Whitespace 半透明
+  for (const j of rankAt(fr).slice().reverse()) {
+    const b = fr.s[j], L = LANGS[j], alive = b[4] === 1, o = outT[j], e = alive ? 0 : s - o.t; if (!alive && e > 1.2) continue;
+    const n = histIdx[f][j], pts = hist[j].slice(Math.max(0, n - b[5]), n).reverse(), col = L.color;
+    g.globalAlpha = (alive ? 1 : Math.max(0, 1 - e / 1.2)) * (L.ghost ? 0.42 : 1);
+    for (let q = pts.length - 1; q >= 0; q--) { const p = pts[q], rr = R * (0.72 + 0.28 * (1 - q / Math.max(1, pts.length))); g.fillStyle = col; g.beginPath(); g.arc(p[0], p[1], rr, 0, 6.283); g.fill(); }
+    g.save(); g.translate(b[0], b[1]); g.rotate(b[2]); g.fillStyle = col; g.beginPath(); g.arc(0, 0, R * 1.15, 0, 6.283); g.fill();
+    g.fillStyle = '#fff'; g.beginPath(); g.arc(R * .45, -R * .45, R * .32, 0, 6.283); g.arc(R * .45, R * .45, R * .32, 0, 6.283); g.fill(); g.fillStyle = '#111'; g.beginPath(); g.arc(R * .6, -R * .45, R * .15, 0, 6.283); g.arc(R * .6, R * .45, R * .15, 0, 6.283); g.fill(); g.restore();
+    const tag = L.tag + ' ' + b[3]; g.font = '900 26px "PingFang SC",Menlo'; const tw = g.measureText(tag).width + 20; g.fillStyle = col; g.beginPath(); g.roundRect(b[0] - tw / 2, b[1] - R - 48, tw, 34, 10); g.fill();
+    if (L.ghost) { g.setLineDash([6, 5]); g.strokeStyle = '#fff'; g.lineWidth = 2; g.stroke(); g.setLineDash([]); }
+    g.fillStyle = ['JavaScript', 'C', 'Go', 'TypeScript', 'Whitespace'].includes(L.name) ? '#111' : '#fff'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(tag, b[0], b[1] - R - 31); g.globalAlpha = 1;
+  }
+  for (const o of S.ev.out) { if (o.cause === 'win') continue; const e = s - o.t; if (e < 0 || e > 0.8) continue;   // 撞击点散开的光点
+    for (let q = 0; q < 10; q++) { const an = hash(o.i, q) * 6.283, d = 20 + 90 * e; g.fillStyle = 'rgba(255,220,80,' + (1 - e / 0.8).toFixed(2) + ')'; g.beginPath(); g.arc(o.x + Math.cos(an) * d, o.y + Math.sin(an) * d, 7, 0, 6.283); g.fill(); } }
+  // 排名 / 字幕 / 结算
+  document.getElementById('rank').innerHTML = rankAt(fr).map((j, n) => { const b = fr.s[j], alive = b[4] === 1, L = LANGS[j];
+    return `<div class="${j === bet ? 'me' : ''} ${alive ? '' : 'out'}">${alive ? n + 1 : '✕'}<i style="background:${L.color};${L.ghost ? 'border:1px dashed #fff' : ''}"></i><b>${L.tag}</b><em>${alive ? '长 ' + b[3] : (outT[j].cause === 'wall' ? '出圈' : '撞 ' + LANGS[outT[j].by].tag)}</em></div>`; }).join('');
+  const last = S.ev.out.filter(e => e.cause !== 'win' && e.t <= s && s - e.t < 2).at(-1);
+  document.getElementById('feed').textContent = last ? `${LANGS[last.i].name} ${last.cause === 'wall' ? '出圈' : '撞上了 ' + LANGS[last.by].name + ' 的身体'}` : '';
+  if (!done && s >= S.T - 0.03) {
+    done = true; const win = S.ev.out.find(e => e.cause === 'win'), order = S.ev.out.map(e => e.i).reverse(), pos = order.indexOf(bet);
+    document.getElementById('res').innerHTML = `冠军 <b style="color:${LANGS[win.i].color}">${LANGS[win.i].name}</b> · 你押的 ${LANGS[bet].name} ` + (pos === 0 ? '活到最后' : `第 ${pos + 1} 名${outT[bet] ? ' (' + (outT[bet].cause === 'wall' ? '出圈' : '撞上 ' + LANGS[outT[bet].by].name) + ')' : ''}`);
+    document.getElementById('msg').classList.remove('hide');
+  }
+}
+const bets = document.getElementById('bets');
+LANGS.forEach((L, i) => { const b = document.createElement('button'); b.textContent = L.name; b.style.background = L.color; b.style.color = ['JavaScript', 'C', 'Go', 'TypeScript', 'Whitespace'].includes(L.name) ? '#111' : '#fff'; if (L.ghost) b.classList.add('ghost'); b.onclick = () => { bet = i; [...bets.children].forEach((x, k) => x.classList.toggle('on', k === i)); }; bets.appendChild(b); });
+bets.children[0].classList.add('on');
+document.getElementById('go').onclick = () => start((Math.random() * 1e9) | 0);
+document.getElementById('rep').onclick = () => start(125);         // 视频 G07 那一局: Whitespace 四连杀, 38.6s 撞掉 Python
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

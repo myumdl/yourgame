@@ -13,6 +13,8 @@
 | 03 | 3D 打砖块 | [games/03-breakout](games/03-breakout/index.html) | ← → 或 鼠标 移动挡板 · 空格 开始 | G03「150 行代码写一个 3D 打砖块」 | ~150 |
 | 04 | 编程语言弹珠赛 | [games/04-marble-race](games/04-marble-race/index.html) | 点一门语言下注 · 开赛 / 回放视频那一局 | G04「8 门编程语言弹珠赛」 | ~160 |
 | 05 | AI 大模型暴力摩托 | [games/05-ai-moto](games/05-ai-moto/index.html) | 点一个模型下注 · 开赛 / 回放视频那一局 | G05「8 个 AI 大模型暴力摩托」 | ~260 (画面 118 + 比赛 sim.js 148) |
+| 06 | 编程语言跑酷淘汰赛 | [games/06-parkour](games/06-parkour/index.html) | 点一门语言下注 · 开赛 / 回放视频那一局 | G06「8 门编程语言跑酷淘汰赛」 | ~240 (画面 119 + 比赛 sim.js 117) |
+| 07 | 编程语言贪吃蛇大逃杀 | [games/07-snake](games/07-snake/index.html) | 点一门语言下注 · 开赛 / 回放视频那一局 | G07「10 门编程语言贪吃蛇大逃杀」 | ~200 (画面 101 + 比赛 sim.js 100) |
 
 在线试玩 (GitHub Pages): https://myumdl.github.io/yourgame/
 
@@ -37,7 +39,9 @@ yourgame/
 │   ├── 02-tetris/        3D 俄罗斯方块 (单文件)
 │   ├── 03-breakout/      3D 打砖块 (单文件)
 │   ├── 04-marble-race/   编程语言弹珠赛 (单文件 + replay-g04.json 视频那一局的轨迹)
-│   └── 05-ai-moto/       AI 大模型暴力摩托 (index.html 画面 + sim.js 比赛逻辑; 纯 JS 算术, seed 44 在任何浏览器都是视频那一局)
+│   ├── 05-ai-moto/       AI 大模型暴力摩托 (index.html 画面 + sim.js 比赛逻辑; 纯 JS 算术, seed 44 在任何浏览器都是视频那一局)
+│   ├── 06-parkour/       编程语言跑酷淘汰赛 (同上结构; seed 459 = 视频那一局, Python 0.08 秒险胜 C++)
+│   └── 07-snake/         编程语言贪吃蛇大逃杀 (Canvas 2D + sim.js; seed 125 = 视频那一局, Whitespace 四连杀夺冠)
 └── vendor/               Three.js r181 + matter-js 0.20 本地副本 (+ 用到的 addons), 零外网依赖
 ```
 
